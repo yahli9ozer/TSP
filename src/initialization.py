@@ -4,12 +4,12 @@ from src.instance import TSPInstance
 
 class PopulationInitializer:
     """
-    מחלקה האחראית על בניית פתרונות התחלתיים לאוכלוסייה.
-    מטרתה לייצר שני מסלולים המילטוניאנים עם מינימום חפיפת קשתות.
+    Class responsible for generating initial solutions for the population.
+    Its primary goal is to produce two Hamiltonian paths with minimal edge overlap.
     """
     @staticmethod
     def generate_random_permutation(num_cities: int) -> List[int]:
-        """מייצר מסלול אקראי חוקי (תמורה של הערים)"""
+        """Generates a valid random path (a permutation of the cities)."""
         path = list(range(num_cities))
         random.shuffle(path)
         return path
@@ -17,13 +17,13 @@ class PopulationInitializer:
     @staticmethod
     def generate_disjoint_path(instance: TSPInstance, forbidden_edges: Set[Tuple[int, int]]) -> List[int]:
         """
-        בונה מסלול שני בצורה גרידית-הסתברותית (Nearest Neighbor משולב רולטה),
-        תוך הענשה כבדה של קשתות שנמצאות ב-forbidden_edges (הקשתות של המסלול הראשון).
+        Builds a second path using a greedy-probabilistic approach (Nearest Neighbor combined with roulette wheel selection),
+        while heavily penalizing edges present in forbidden_edges (the edges of the first path).
         """
         num_cities = instance.num_cities
         unvisited = set(range(num_cities))
         
-        # בחירת עיר התחלה אקראית
+        # Choose a random starting city
         current_city = random.choice(list(unvisited))
         path = [current_city]
         unvisited.remove(current_city)
@@ -33,20 +33,20 @@ class PopulationInitializer:
             weights = []
             
             for next_city in candidates:
-                # הגדרת הקשת כזוג לא מסודר (הקטן תמיד ראשון)
+                # Define the edge as an unordered pair (smaller index always first)
                 edge = (min(current_city, next_city), max(current_city, next_city))
                 base_dist = instance.get_distance(current_city, next_city)
                 
-                # אם הקשת אסורה (חופפת למסלול 1), נוסיף לה עלות מדומה חריפה מאוד
+                # If the edge is forbidden (overlaps with path 1), add a severe artificial penalty
                 penalty = 10000.0 if edge in forbidden_edges else 0.0
                 total_cost = base_dist + penalty
                 
-                # נהפוך את העלות למשקל חיובי לבחירה (ככל שהעלות קטנה, המשקל גדול יותר)
-                # נוסיף אפסילון קטן למניעת חלוקה באפס
+                # Convert the cost to a positive weight for selection (smaller cost = higher weight)
+                # Add a small epsilon to prevent division by zero
                 weight = 1.0 / (total_cost + 1e-6)
                 weights.append(weight)
             
-            # בחירת השכן הבא באמצעות הגרלת רולטה משוקללת
+            # Select the next neighbor using weighted roulette wheel selection
             total_w = sum(weights)
             if total_w == 0:
                 next_city = random.choice(candidates)
