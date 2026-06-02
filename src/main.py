@@ -6,19 +6,28 @@ from src.operators import GeneticOperators
 from src.local_search import MemeticLocalSearch
 
 class MinimaxMemeticAlgorithm:
+    """
+    Main engine for the Minimax Memetic Algorithm.
+    Integrates Genetic Algorithms with Local Search (2-opt) to find two edge-disjoint paths.
+    """
     def __init__(self, 
                  instance: TSPInstance, 
                  pop_size: int = 50, 
                  generations: int = 100,
                  mutation_rate: float = 0.1,
-                 local_search_prob: float = 0.0,  # 0.0 = Standard GA, 1.0 = Full Memetic
-                 elitism_count: int = 2):
+                 local_search_prob: float = 0.0,
+                 elitism_count: int = 2,
+                 target_optimum: float = 1.0):  
+        """
+        Initializes the Memetic Algorithm parameters.
+        """
         self.instance = instance
         self.pop_size = pop_size
         self.generations = generations
         self.mutation_rate = mutation_rate
         self.local_search_prob = local_search_prob
         self.elitism_count = elitism_count
+        self.target_optimum = target_optimum
         self.population: List[TwinPathsGenome] = []
 
     def initialize_population(self):
@@ -36,26 +45,34 @@ class MinimaxMemeticAlgorithm:
         return min(contenders, key=lambda g: g.fitness)
 
     def run(self) -> TwinPathsGenome:
+        """
+        Executes the evolutionary process.
+        Prints live progress every 10 generations, including the current ratio to the target optimum.
+        """
         self.initialize_population()
         # min() automatically compares fitness Tuples lexicographically
         best_overall = min(self.population, key=lambda g: g.fitness)
         
         print(f"Starting Evolution... Local Search Prob: {self.local_search_prob}")
-        # FIX: Extract specific values from the fitness Tuple for printing
-        print(f"Gen   0 | Max Cost: {best_overall.fitness[1]:.2f} | Sum: {best_overall.fitness[2]:.2f}")
+        
+        # Print initial state (Generation 0)
+        initial_max_cost = best_overall.fitness[1]
+        initial_ratio = initial_max_cost / self.target_optimum
+        print(f"Gen   0 | Max Cost: {initial_max_cost:.2f} | Ratio: {initial_ratio:.2f}x | Sum: {best_overall.fitness[2]:.2f}")
 
         for gen in range(1, self.generations + 1):
             new_population = []
             
-            # 1. Elitism
+            # 1. Elitism: Keep the best individuals automatically
             self.population.sort(key=lambda g: g.fitness)
             new_population.extend(self.population[:self.elitism_count])
             
-            # 2. Breeding
+            # 2. Breeding: Fill the rest of the new population
             while len(new_population) < self.pop_size:
                 p1 = self.tournament_selection()
                 p2 = self.tournament_selection()
                 
+                # Reproduce (Crossover + Mutation)
                 child = GeneticOperators.reproduce(p1, p2, self.mutation_rate)
                 
                 # 3. Memetic Local Search
@@ -65,13 +82,18 @@ class MinimaxMemeticAlgorithm:
                 new_population.append(child)
                 
             self.population = new_population
-            current_best = min(self.population, key=lambda g: g.fitness)
             
+            # Check if we found a new absolute best
+            current_best = min(self.population, key=lambda g: g.fitness)
             if current_best.fitness < best_overall.fitness:
                 best_overall = current_best
                 
+            # 4. Live Progress Tracking (Print every 10 generations)
             if gen % 10 == 0 or gen == self.generations:
-                # FIX: Extract specific values from the fitness Tuple for printing
-                print(f"Gen {gen:3d} | Max Cost: {best_overall.fitness[1]:.2f} | Sum: {best_overall.fitness[2]:.2f} | Valid: {best_overall.is_valid()}")
+                current_max_cost = best_overall.fitness[1]
+                current_ratio = current_max_cost / self.target_optimum
+                is_valid_str = str(best_overall.is_valid())
+                
+                print(f"Gen {gen:3d} | Max Cost: {current_max_cost:.2f} | Ratio: {current_ratio:.2f}x | Sum: {best_overall.fitness[2]:.2f} | Valid: {is_valid_str}")
 
         return best_overall
