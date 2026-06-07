@@ -4,19 +4,46 @@ import math
 import threading
 import sys
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 import matplotlib.pyplot as plt
 
 # Import our custom classes
 from src.instance import TSPInstance
 from src.main import MinimaxMemeticAlgorithm
 
-# Dictionary of optimum targets (Single TSP benchmarks)
+# Dictionary of optimum targets (used ONLY for known instances, otherwise ignored)
 BENCHMARKS = {
     "burma14": 3323.0, "gr17": 2085.0, "gr24": 1272.0,
     "fri26": 937.0, "bayg29": 1610.0, "dantzig42": 699.0,
     "att48": 10628.0, "eil51": 426.0, "berlin52": 7542.0, "eil76": 538.0
 }
+
+def get_available_instances():
+    """ Robustly scans the 'data' directory for all .tsp files. """
+    instances = []
+    
+    # Check both relative path and absolute script path
+    possible_paths = [
+        "data",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    ]
+    
+    valid_data_dir = None
+    for p in possible_paths:
+        if os.path.exists(p) and os.path.isdir(p):
+            valid_data_dir = p
+            break
+            
+    if valid_data_dir:
+        for f in os.listdir(valid_data_dir):
+            if f.lower().endswith(".tsp"):
+                instances.append(f[:-4])  # Remove the .tsp extension
+                
+    if instances:
+        return sorted(instances)
+        
+    print("⚠️ Warning: No .tsp files found in the 'data' folder.")
+    return list(BENCHMARKS.keys())  # Fallback only if folder is completely empty
 
 class ThreadSafeConsole(object):
     """ Routes print statements from the algorithm safely into the app's text widget """
@@ -36,8 +63,8 @@ class ThreadSafeConsole(object):
 class TSPGuiApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Minimax TSP - Memetic Algorithm Optimizer")
-        self.root.geometry("800x650")
+        self.root.title("Minimax TSP - Custom Algorithm Optimizer")
+        self.root.geometry("850x650")
         
         self.results = {}  # Stores the best genomes and runtime found
         self.instance = None
@@ -49,13 +76,28 @@ class TSPGuiApp:
         top_frame = ttk.Frame(self.root, padding=10)
         top_frame.pack(fill=tk.X)
 
-        ttk.Label(top_frame, text="Select Instance:", font=("Arial", 12, "bold")).pack(side=tk.LEFT, padx=5)
+        # Instance Selection (Dynamically loaded from data folder)
+        ttk.Label(top_frame, text="Instance:", font=("Arial", 11, "bold")).pack(side=tk.LEFT, padx=(0, 5))
         
-        self.combo_instance = ttk.Combobox(top_frame, values=list(BENCHMARKS.keys()), state="readonly", font=("Arial", 12))
-        self.combo_instance.current(0)
+        available_files = get_available_instances()
+        self.combo_instance = ttk.Combobox(top_frame, values=available_files, state="readonly", width=15, font=("Arial", 11))
+        if available_files:
+            self.combo_instance.current(0)
         self.combo_instance.pack(side=tk.LEFT, padx=5)
         
-        self.btn_solve = ttk.Button(top_frame, text="🚀 Start Optimization", command=self.start_solving)
+        # Generations Selection
+        ttk.Label(top_frame, text="Generations:", font=("Arial", 11, "bold")).pack(side=tk.LEFT, padx=(15, 5))
+        self.spin_gens = ttk.Spinbox(top_frame, from_=10, to=100000, width=6, font=("Arial", 11))
+        self.spin_gens.set(100)  # Default value
+        self.spin_gens.pack(side=tk.LEFT, padx=5)
+
+        # Local Search Prob Selection
+        ttk.Label(top_frame, text="LS Prob (0-1):", font=("Arial", 11, "bold")).pack(side=tk.LEFT, padx=(15, 5))
+        self.spin_prob = ttk.Spinbox(top_frame, from_=0.0, to=1.0, increment=0.1, width=5, font=("Arial", 11))
+        self.spin_prob.set(0.2)  # Default value
+        self.spin_prob.pack(side=tk.LEFT, padx=5)
+
+        self.btn_solve = ttk.Button(top_frame, text="🚀 Start Run", command=self.start_solving)
         self.btn_solve.pack(side=tk.LEFT, padx=20)
 
         # 2. Middle Frame: Live Console
@@ -73,14 +115,9 @@ class TSPGuiApp:
         self.bottom_frame = ttk.LabelFrame(self.root, text=" View Paths (Visualizations) ", padding=10)
         self.bottom_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        self.btn_ga = ttk.Button(self.bottom_frame, text="👁️ View GA Path", command=lambda: self.show_paths("GA"))
-        self.btn_ga.pack(side=tk.LEFT, padx=5)
-        
-        self.btn_partial = ttk.Button(self.bottom_frame, text="👁️ View Partial Memetic Path", command=lambda: self.show_paths("Partial"))
-        self.btn_partial.pack(side=tk.LEFT, padx=5)
-        
-        self.btn_full = ttk.Button(self.bottom_frame, text="👁️ View Full Memetic Path", command=lambda: self.show_paths("Full"))
-        self.btn_full.pack(side=tk.LEFT, padx=5)
+        # Only one button needed now, as we run one custom config at a time
+        self.btn_view = ttk.Button(self.bottom_frame, text="👁️ View Path", command=lambda: self.show_paths("Custom"))
+        self.btn_view.pack(side=tk.LEFT, padx=5)
         
         # Initialize state
         self._enable_controls(True)
@@ -88,23 +125,35 @@ class TSPGuiApp:
     def _enable_controls(self, enable_start=True, enable_viz=False):
         """ Robust state management for buttons """
         self.btn_solve.config(state=tk.NORMAL if enable_start else tk.DISABLED)
-        state = tk.NORMAL if enable_viz else tk.DISABLED
-        self.btn_ga.config(state=state)
-        self.btn_partial.config(state=state)
-        self.btn_full.config(state=state)
+        self.btn_view.config(state=tk.NORMAL if enable_viz else tk.DISABLED)
 
     def start_solving(self):
+        # Validate inputs
+        try:
+            generations = int(self.spin_gens.get())
+            ls_prob = float(self.spin_prob.get())
+            if ls_prob < 0.0 or ls_prob > 1.0:
+                raise ValueError("Probability must be between 0.0 and 1.0")
+        except ValueError as e:
+            messagebox.showerror("Invalid Input", "Please enter valid numbers for Generations and LS Prob.")
+            return
+
         # Clear screen and disable solve button, keep viz buttons disabled until done
         self.console.delete(1.0, tk.END)
         self._enable_controls(enable_start=False, enable_viz=False)
         self.results = {}
         
         instance_name = self.combo_instance.get()
+        
         # Run in a separate daemon thread
-        threading.Thread(target=self.run_algorithms, args=(instance_name,), daemon=True).start()
+        threading.Thread(target=self.run_algorithms, args=(instance_name, generations, ls_prob), daemon=True).start()
 
-    def run_algorithms(self, name):
+    def run_algorithms(self, name, generations, ls_prob):
+        # Determine absolute path to the file
         filepath = os.path.join("data", f"{name}.tsp")
+        if not os.path.exists(filepath):
+            filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", f"{name}.tsp")
+            
         if not os.path.exists(filepath):
             print(f"❌ Error: File {filepath} not found!")
             self.root.after(0, lambda: self._enable_controls(True, False))
@@ -112,37 +161,54 @@ class TSPGuiApp:
             
         print(f"Loading instance '{name}'...")
         self.instance = TSPInstance(filepath)
-        target = BENCHMARKS.get(name, 1.0)
         
-        configs = [
-            ("GA", 0.0),
-            ("Partial", 0.2),
-            ("Full", 1.0)
-        ]
+        # Check if we have a known target for this instance to calculate ratio
+        target = BENCHMARKS.get(name, None)
         
         try:
-            for config_name, prob in configs:
-                print(f"\n{'-'*60}")
-                print(f"Running algorithm: {config_name} (Local Search Prob: {prob})")
-                print(f"{'-'*60}")
-                
-                algo = MinimaxMemeticAlgorithm(
-                    instance=self.instance, pop_size=50, generations=100, 
-                    mutation_rate=0.1, local_search_prob=prob, elitism_count=2, target_optimum=target
-                )
-                
-                start_time = time.time()
-                best_genome = algo.run()
-                end_time = time.time()
-                runtime = end_time - start_time
-                
-                self.results[config_name] = {'genome': best_genome, 'runtime': runtime}
-                
-                max_c, sum_c, diff_c = best_genome.get_lexicographical_scores()
-                print(f"\n✅ Convergence completed for {config_name} in {runtime:.2f} seconds:")
+            print(f"\n{'-'*65}")
+            print(f"Running Custom Algorithm: {generations} Gens | Local Search Prob: {ls_prob}")
+            print(f"{'-'*65}")
+            
+            # Pass target=1.0 internally if None to avoid breaking the core algorithm math
+            algo_target = target if target else 1.0
+            
+            algo = MinimaxMemeticAlgorithm(
+                instance=self.instance, pop_size=50, generations=generations, 
+                mutation_rate=0.1, local_search_prob=ls_prob, elitism_count=2, target_optimum=algo_target
+            )
+            
+            start_time = time.time()
+            
+            # Safe extraction of the output
+            output = algo.run()
+            if isinstance(output, tuple):
+                best_genome = output[0]  
+            else:
+                best_genome = output
+            
+            end_time = time.time()
+            runtime = end_time - start_time
+            
+            # Store the result
+            self.results["Custom"] = {
+                'genome': best_genome, 
+                'runtime': runtime, 
+                'gens': generations, 
+                'prob': ls_prob
+            }
+            
+            max_c, sum_c, diff_c = best_genome.get_lexicographical_scores()
+            print(f"\n✅ Optimization completed in {runtime:.2f} seconds:")
+            
+            if target:
                 print(f"   Max Path: {max_c:.2f} | Imbalance: {diff_c:.2f} | Ratio: {max_c/target:.2f}x")
+            else:
+                print(f"   Max Path: {max_c:.2f} | Imbalance: {diff_c:.2f}")
+                print(f"   (Ratio not calculated: '{name}' is a custom file with no predefined optimum in BENCHMARKS)")
                 
-            print("\n🎉 All runs completed successfully! You can now view the paths.")
+            print("\n🎉 Run completed successfully! You can now view the paths.")
+            
         except Exception as e:
             print(f"\n❌ An error occurred: {e}")
         
@@ -156,6 +222,8 @@ class TSPGuiApp:
         data = self.results[config_name]
         genome = data['genome']
         runtime = data['runtime']
+        gens = data['gens']
+        prob = data['prob']
         
         coords = self.instance.coords if len(self.instance.coords) == self.instance.num_cities else \
                  [(100*math.cos(2*math.pi*i/self.instance.num_cities), 100*math.sin(2*math.pi*i/self.instance.num_cities)) 
@@ -165,7 +233,7 @@ class TSPGuiApp:
         path2 = genome.path2 + [genome.path2[0]]
 
         plt.figure(figsize=(10, 6))
-        plt.title(f"Minimax TSP Solution - {config_name} ({self.combo_instance.get()})\nExecution Time: {runtime:.2f} seconds", fontweight="bold")
+        plt.title(f"Minimax TSP Solution - {self.combo_instance.get()}\nGenerations: {gens} | LS Prob: {prob} | Time: {runtime:.2f}s", fontweight="bold")
         plt.plot([coords[n][0] for n in path1], [coords[n][1] for n in path1], color='blue', linewidth=2.5, label='Path 1 (Blue)', alpha=0.7)
         plt.plot([coords[n][0] for n in path2], [coords[n][1] for n in path2], color='red', linewidth=2.5, linestyle='--', label='Path 2 (Red)', alpha=0.7)
         plt.scatter([c[0] for c in coords], [c[1] for c in coords], color='black', zorder=5)

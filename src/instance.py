@@ -3,7 +3,7 @@ import math
 class TSPInstance:
     """
     Handles parsing and distance calculations for TSPLIB files.
-    Automatically caches all coordinate-based files (EUC_2D, GEO) into a 
+    Automatically caches all coordinate-based files (EUC_2D, GEO, ATT) into a 
     pre-calculated distance matrix for O(1) lightning-fast lookups during Local Search.
     """
     def __init__(self, filepath: str):
@@ -15,6 +15,7 @@ class TSPInstance:
         self.is_matrix_format = False
         self.matrix_format_type = "FULL_MATRIX" # default
         self.is_geo_format = False 
+        self.is_att_format = False # Added flag for pseudo-Euclidean (att48)
         
         self._load_instance()
 
@@ -39,6 +40,8 @@ class TSPInstance:
                 weight_type = line.split()[-1].strip(': ')
                 if weight_type == "GEO":
                     self.is_geo_format = True
+                elif weight_type == "ATT":
+                    self.is_att_format = True  # Detect ATT format
                     
             elif line.startswith("EDGE_WEIGHT_FORMAT"):
                 format_type = line.split()[-1].strip(': ')
@@ -110,7 +113,7 @@ class TSPInstance:
                             idx += 1
 
         # 2. OPTIMIZATION: Handle Coordinate Files 
-        # Pre-calculate the entire matrix so 2-opt doesn't compute square roots!
+        # Pre-calculate the entire matrix so 2-opt doesn't compute square roots
         elif not self.is_matrix_format and self.coords:
             self.distance_matrix = [[0.0] * n for _ in range(n)]
             for i in range(n):
@@ -143,8 +146,24 @@ class TSPInstance:
             
             return float(int(RRR * math.acos(inner_val) + 1.0))
             
+        elif self.is_att_format:
+            # Official TSPLIB pseudo-Euclidean formula for ATT (e.g., att48)
+            x1, y1 = self.coords[city1]
+            x2, y2 = self.coords[city2]
+            dx = x1 - x2
+            dy = y1 - y2
+            
+            # Divide by 10 inside the square root
+            rij = math.sqrt((dx**2 + dy**2) / 10.0)
+            tij = round(rij)
+            
+            if tij < rij:
+                return float(tij + 1)
+            else:
+                return float(tij)
+                
         else:
-            # Standard Euclidean
+            # Standard Euclidean (EUC_2D)
             x1, y1 = self.coords[city1]
             x2, y2 = self.coords[city2]
             return math.dist((x1, y1), (x2, y2))
